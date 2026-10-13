@@ -39,7 +39,14 @@ def parse_args() -> argparse.Namespace:
         help="Target average face width as a fraction of the shorter output side",
     )
     parser.add_argument("--background", choices=("blur", "black", "white"), default="blur")
-    parser.add_argument("--transform", choices=("affine", "similarity"), default="affine")
+    parser.add_argument(
+        "--transform",
+        choices=("person2", "affine", "similarity"),
+        default="person2",
+        help="person2 uses only rotation/uniform scale around person_2; other modes use all three faces",
+    )
+    parser.add_argument("--person2-x", type=float, help="Target person_2 x position in output pixels (default: center)")
+    parser.add_argument("--person2-y", type=float, help="Target person_2 y position in output pixels (default: center)")
     parser.add_argument("--max-images", type=int, help="Process only the first N usable images, for testing")
     parser.add_argument("--preview-dir", type=Path, help="Save aligned stills for visual inspection")
     return parser.parse_args()
@@ -130,6 +137,46 @@ def make_transform(
     # Three non-collinear face anchors define an exact affine transform. This
     # fixes all three face positions, including when camera distance changes.
     return cv2.getAffineTransform(source_points, target_points.astype(np.float32))
+
+
+def make_person2_transform(
+    source_face: dict[str, Any],
+    reference_face: dict[str, Any],
+    output_size: tuple[int, int],
+    face_size_ratio: float,
+    target_xy: tuple[float, float] | None,
+) -> np.ndarray:
+    """Return a rotation + uniform-scale transform anchored on person_2.
+
+    The translation term only places the transformed person_2 anchor at the
+    requested output position. The 2x2 part contains a pure rotation and one
+    shared scale, so there is no shear or non-uniform stretching.
+    """
+    source_anchor = face_anchor(source_face)
+    source_width = float(source_face["bbox"][2])
+    target_width = face_size_ratio * min(output_size)
+    if source_width <= 0 or target_width <= 0:
+        raise ValueError("person_2 face width must be positive")
+
+    def eye_angle(face: dict[str, Any]) -> float:
+        landmarks = face.get("landmarks") or []
+        if len(landmarks) >= 2:
+            dx = float(landmarks[1][0] - landmarks[0][0])
+            dy = float(landmarks[1][1] - landmarks[0][1])
+            return float(np.arctan2(dy, dx))
+        return 0.0
+
+    angle = eye_angle(reference_face) - eye_angle(source_face)
+    scale = target_width / source_width
+    cos_a = float(np.cos(angle))
+    sin_a = float(np.sin(angle))
+    linear = scale * np.asarray([[cos_a, -sin_a], [sin_a, cos_a]], dtype=np.float32)
+    if target_xy is None:
+        target = np.asarray([output_size[0] / 2.0, output_size[1] / 2.0], dtype=np.float32)
+    else:
+        target = np.asarray(target_xy, dtype=np.float32)
+    translation = target - linear @ source_anchor
+    return np.column_stack([linear, translation]).astype(np.float32)
 
 
 def background_canvas(image: np.ndarray, output_size: tuple[int, int], mode: str) -> np.ndarray:
@@ -238,19 +285,30 @@ def main() -> int:
     if reference_record is None:
         raise SystemExit(f"Reference image is not present in detections.json: {reference_path}")
     reference_faces = selected_faces(reference_record)
-    if set(reference_faces) != set(LABELS):
+    if args.transform == "person2":
+        if "person_2" not in reference_faces:
+            raise SystemExit(f"Reference image must contain an accepted person_2 face: {reference_path}")
+    elif set(reference_faces) != set(LABELS):
         raise SystemExit(f"Reference image must contain all three accepted faces: {reference_path}")
     reference_image = load_image(reference_path, cv2, np, Image, ImageOps)
-    ref_points = np.asarray([face_anchor(reference_faces[label]) for label in LABELS], dtype=np.float32)
     output_size = (args.width, args.height)
-    target_points = canonical_target_points(ref_points, reference_faces, output_size, args.face_size_ratio)
+    if args.transform == "person2":
+        target_points = None
+    else:
+        ref_points = np.asarray([face_anchor(reference_faces[label]) for label in LABELS], dtype=np.float32)
+        target_points = canonical_target_points(ref_points, reference_faces, output_size, args.face_size_ratio)
+    target_xy = (
+        args.person2_x if args.person2_x is not None else output_size[0] / 2.0,
+        args.person2_y if args.person2_y is not None else output_size[1] / 2.0,
+    )
 
     usable: list[tuple[dict[str, Any], dict[str, dict[str, Any]]]] = []
     skipped: list[dict[str, str]] = []
     for record in records:
         faces = selected_faces(record)
-        if set(faces) != set(LABELS):
-            skipped.append({"path": record.get("path", ""), "reason": "missing one or more target faces"})
+        required_labels = {"person_2"} if args.transform == "person2" else set(LABELS)
+        if not required_labels.issubset(faces):
+            skipped.append({"path": record.get("path", ""), "reason": "missing required target face(s)"})
             continue
         usable.append((record, faces))
         if args.max_images and len(usable) >= args.max_images:
@@ -273,7 +331,17 @@ def main() -> int:
         for index, (record, faces) in enumerate(usable, 1):
             path = Path(record["path"])
             image = load_image(path, cv2, np, Image, ImageOps)
-            matrix = make_transform(faces, target_points, args.transform)
+            if args.transform == "person2":
+                matrix = make_person2_transform(
+                    faces["person_2"],
+                    reference_faces["person_2"],
+                    output_size,
+                    args.face_size_ratio,
+                    target_xy,
+                )
+            else:
+                assert target_points is not None
+                matrix = make_transform(faces, target_points, args.transform)
             frame = warp_image(image, matrix, output_size, args.background)
             used_paths.append(str(path))
             if preview_dir:

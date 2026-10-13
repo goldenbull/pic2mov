@@ -105,15 +105,19 @@ uv run make_animation.py \
   --height 1080 \
   --hold-seconds 1.5 \
   --transition-seconds 0.5 \
-  --background blur
+  --background blur \
+  --transform person2
 ```
 
-The three face anchors from the reference image are mapped to the same output
-positions in every frame. `--transform affine` (the default) fixes all three
-anchors exactly; `--transform similarity` reduces background stretching while
-allowing small residual face-position error. Portrait images use a blurred
-background by default; use `--background black` or `--background white` for a
-plain fill. Increase `--face-size-ratio` if the faces should appear larger.
+The default `--transform person2` uses only a rotation and uniform scale based
+on `person_2`, then translates the whole image so `person_2` stays at the
+output center. It ignores the other two face positions. Set
+`--person2-x`/`--person2-y` to choose another fixed location. The alternative
+`--transform affine` fixes all three anchors exactly but can stretch the
+background; `--transform similarity` reduces that stretching while allowing
+small residual position error. Portrait images use a blurred background by
+default; use `--background black` or `--background white` for a plain fill.
+Increase `--face-size-ratio` if `person_2` should appear larger.
 
 Images without all three accepted target faces are skipped and listed in the
 `.report.json` file next to the MP4. The report also records the exact input
