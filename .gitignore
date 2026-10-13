@@ -1,5 +1,8 @@
 .venv/
 models/
 face_review/
+*.mp4
+*.report.json
+aligned_preview/
 __pycache__/
 *.py[cod]

@@ -206,6 +206,53 @@ def serializable_faces(faces) -> list[dict[str, Any]]:
     return output
 
 
+def load_manual_config(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    if not path.exists():
+        raise SystemExit(f"Manual config does not exist: {path}")
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Invalid manual config JSON: {path}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise SystemExit("Manual config root must be a JSON object")
+    return config
+
+
+def apply_manual_override(record: dict[str, Any], config: dict[str, Any]) -> bool:
+    """Apply a per-file face-index/identity override."""
+    basename = Path(record["path"]).name
+    override = config.get("overrides", {}).get(basename)
+    if override is None:
+        return False
+    if not isinstance(override, dict):
+        raise SystemExit(f"Override for {basename} must be an object")
+    indices = override.get("use_face_indices", [])
+    labels = override.get("labels_in_face_order", [])
+    if len(indices) != len(labels):
+        raise SystemExit(
+            f"Override for {basename} has {len(indices)} indices but {len(labels)} labels"
+        )
+    faces = record["faces"]
+    for face in faces:
+        face["identity"] = None
+        face["similarity"] = None
+        face["accepted"] = False
+    for index, label in zip(indices, labels):
+        if not isinstance(index, int) or index < 0 or index >= len(faces):
+            raise SystemExit(
+                f"Override for {basename} refers to face index {index}; "
+                f"valid range is 0..{len(faces) - 1}"
+            )
+        if label not in {"person_1", "person_2", "person_3"}:
+            raise SystemExit(f"Override for {basename} has unknown label: {label}")
+        faces[index]["identity"] = label
+        faces[index]["accepted"] = True
+    record["manual_override_applied"] = True
+    return True
+
+
 def iter_images(input_dir: Path) -> Iterable[Path]:
     return sorted(
         (p for p in input_dir.iterdir() if p.is_file() and p.suffix in IMAGE_SUFFIXES),
@@ -231,6 +278,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("face_review"))
     parser.add_argument("--reference-image", type=str, help="Image containing the three target people")
     parser.add_argument("--model-dir", type=Path, default=Path("models"))
+    parser.add_argument(
+        "--manual-config",
+        type=Path,
+        help="JSON file containing per-image face-index and identity overrides",
+    )
     parser.add_argument("--score-threshold", type=float, default=0.85)
     parser.add_argument("--nms-threshold", type=float, default=0.30)
     parser.add_argument("--top-k", type=int, default=5000)
@@ -258,6 +310,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     cv2, np, Image, ImageOps = require_dependencies()
+    manual_config = load_manual_config(args.manual_config)
     if not args.input_dir.is_dir():
         raise SystemExit(f"Input directory does not exist: {args.input_dir}")
     files = list(iter_images(args.input_dir))
@@ -278,7 +331,7 @@ def main() -> int:
             image = load_image(path, cv2, np, Image, ImageOps)
             faces = detect_faces(image, detector, cv2, args.max_detect_size, args.min_face_size)
             records.append({"path": str(path), "faces": faces, "error": None})
-            print(f"[{number:03d}/{len(files):03d}] {path.name}: {len(faces)} face(s)")
+            print(f"[{number:03d}/{len(files):03d}] {path.name}: {len(faces)} candidate face(s)")
         except Exception as exc:
             records.append({"path": str(path), "faces": [], "error": repr(exc)})
             print(f"[{number:03d}/{len(files):03d}] {path.name}: ERROR {exc}", file=sys.stderr)
@@ -310,13 +363,18 @@ def main() -> int:
             continue
         path = Path(record["path"])
         image = load_image(path, cv2, np, Image, ImageOps)
-        best_identity_assignment(
-            record["faces"], reference_features, recognizer, image, np, args.identity_threshold
-        )
+        if not apply_manual_override(record, manual_config):
+            best_identity_assignment(
+                record["faces"], reference_features, recognizer, image, np, args.identity_threshold
+            )
         record["raw_face_count"] = len(record["faces"])
         record["target_face_count"] = sum(1 for face in record["faces"] if face.get("accepted"))
         record["review_face_count"] = sum(
             1 for face in record["faces"] if face.get("identity") and not face.get("accepted")
+        )
+        print(
+            f"[review] {path.name}: target={record['target_face_count']}/3, "
+            f"candidates={record['raw_face_count']}, review={record['review_face_count']}"
         )
         annotated = draw_annotations(image, record["faces"], cv2, np)
         save_thumbnail(annotated, annotated_dir / f"{path.stem}.jpg", cv2)
@@ -346,9 +404,11 @@ def main() -> int:
             }
         },
     }
-    (output_dir / "manual_config.json").write_text(
-        json.dumps(manual_template, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    manual_template_path = output_dir / "manual_config.json"
+    if not manual_template_path.exists():
+        manual_template_path.write_text(
+            json.dumps(manual_template, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     counts: dict[str, int] = {}
     for record in records:
         key = str(record.get("target_face_count", 0)) if not record["error"] else "error"
