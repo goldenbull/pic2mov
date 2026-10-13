@@ -1,0 +1,5 @@
+.venv/
+models/
+face_review/
+__pycache__/
+*.py[cod]
