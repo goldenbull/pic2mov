@@ -111,7 +111,9 @@ uv run make_animation.py \
 
 The default `--transform person2` uses only a rotation and uniform scale based
 on `person_2`, then translates the whole image so `person_2` stays at the
-output center. It ignores the other two face positions. Set
+fixed target position. It ignores the other two face positions. By default, `person_2`
+is horizontally centered and vertically placed at `2/3` of the output height,
+which is one-third of the way up from the bottom. Set
 `--person2-x`/`--person2-y` to choose another fixed location. The alternative
 `--transform affine` fixes all three anchors exactly but can stretch the
 background; `--transform similarity` reduces that stretching while allowing

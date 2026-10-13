@@ -30,12 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--hold-seconds", type=float, default=1.5)
-    parser.add_argument("--transition-seconds", type=float, default=0.5)
+    parser.add_argument("--hold-seconds", type=float, default=1.0)
+    parser.add_argument("--transition-seconds", type=float, default=0.3)
     parser.add_argument(
         "--face-size-ratio",
         type=float,
-        default=0.18,
+        default=0.15,
         help="Target average face width as a fraction of the shorter output side",
     )
     parser.add_argument("--background", choices=("blur", "black", "white"), default="blur")
@@ -46,7 +46,11 @@ def parse_args() -> argparse.Namespace:
         help="person2 uses only rotation/uniform scale around person_2; other modes use all three faces",
     )
     parser.add_argument("--person2-x", type=float, help="Target person_2 x position in output pixels (default: center)")
-    parser.add_argument("--person2-y", type=float, help="Target person_2 y position in output pixels (default: center)")
+    parser.add_argument(
+        "--person2-y",
+        type=float,
+        help="Target person_2 y position in output pixels (default: 2/3 of height, one-third up from bottom)",
+    )
     parser.add_argument("--max-images", type=int, help="Process only the first N usable images, for testing")
     parser.add_argument("--preview-dir", type=Path, help="Save aligned stills for visual inspection")
     return parser.parse_args()
@@ -299,7 +303,7 @@ def main() -> int:
         target_points = canonical_target_points(ref_points, reference_faces, output_size, args.face_size_ratio)
     target_xy = (
         args.person2_x if args.person2_x is not None else output_size[0] / 2.0,
-        args.person2_y if args.person2_y is not None else output_size[1] / 2.0,
+        args.person2_y if args.person2_y is not None else output_size[1] * 2.0 / 3.0,
     )
 
     usable: list[tuple[dict[str, Any], dict[str, dict[str, Any]]]] = []
