@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,12 @@ def parse_args() -> argparse.Namespace:
         help="Target average face width as a fraction of the shorter output side",
     )
     parser.add_argument("--background", choices=("blur", "black", "white"), default="blur")
+    parser.add_argument(
+        "--date-font-scale",
+        type=float,
+        default=2.0,
+        help="Subtitle font scale at 1920-pixel output width",
+    )
     parser.add_argument(
         "--transform",
         choices=("person2", "affine", "similarity"),
@@ -210,6 +217,28 @@ def warp_image(image: np.ndarray, matrix: np.ndarray, output_size: tuple[int, in
     return np.clip(warped.astype(np.float32) * alpha + canvas.astype(np.float32) * (1 - alpha), 0, 255).astype(np.uint8)
 
 
+def date_caption(path: Path) -> str | None:
+    match = re.match(r"^(\d{4})(\d{2})\d{2}", path.stem)
+    return f"{match.group(1)}.{match.group(2)}" if match else None
+
+
+def draw_date_caption(frame: np.ndarray, path: Path, base_font_scale: float) -> np.ndarray:
+    caption = date_caption(path)
+    if caption is None:
+        return frame
+    height, width = frame.shape[:2]
+    font_scale = max(0.5, base_font_scale * width / 1920.0)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    thickness = max(1, round(width / 960.0))
+    (text_width, text_height), baseline = cv2.getTextSize(caption, font, font_scale, thickness)
+    margin = max(18, round(width * 0.025))
+    origin = (width - text_width - margin, height - text_height - margin)
+    # A thin dark outline keeps the red text readable against bright walls.
+    cv2.putText(frame, caption, origin, font, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(frame, caption, origin, font, font_scale, (0, 0, 255), thickness, cv2.LINE_AA)
+    return frame
+
+
 def open_ffmpeg(output: Path, width: int, height: int, fps: int):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -334,6 +363,8 @@ def main() -> int:
         previous: np.ndarray | None = None
         for index, (record, faces) in enumerate(usable, 1):
             path = Path(record["path"])
+            percent = index / len(usable) * 100.0
+            print(f"[{index:03d}/{len(usable):03d}] {percent:6.2f}% 处理 {path.name}", flush=True)
             image = load_image(path, cv2, np, Image, ImageOps)
             if args.transform == "person2":
                 matrix = make_person2_transform(
@@ -347,6 +378,7 @@ def main() -> int:
                 assert target_points is not None
                 matrix = make_transform(faces, target_points, args.transform)
             frame = warp_image(image, matrix, output_size, args.background)
+            frame = draw_date_caption(frame, path, args.date_font_scale)
             used_paths.append(str(path))
             if preview_dir:
                 cv2.imwrite(str(preview_dir / f"{index:04d}_{path.stem}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])

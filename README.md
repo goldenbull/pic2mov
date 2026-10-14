@@ -1,27 +1,26 @@
-# Family-memory face alignment
+# 家庭合影动画
 
-`detect_faces.py` is the review stage for the family photo animation. It
-detects faces, assigns the three target people relative to a reference image,
-and writes annotated thumbnails for inspection. It does not create the final
-video yet.
+这个项目用于把按月份保存的家庭合影制作成带渐变过渡的 MP4 动画。
 
-## Install with uv
+`detect_faces.py` 负责检测人脸并生成供人工检查的结果；`make_animation.py`
+读取检测结果和人工修正配置，固定 `person_2` 的脸部位置，并生成最终动画。
+
+## 使用 uv 安装环境
 
 ```bash
 uv sync
 ```
 
-`uv sync` creates and manages the project environment in `.venv` and installs
-the dependencies declared in `pyproject.toml`. Activate it only when you want
-an interactive shell:
+`uv sync` 会在项目目录中创建并管理 `.venv`，并安装 `pyproject.toml` 中声明的
+依赖。如果需要进入交互式虚拟环境，可以执行：
 
 ```bash
 source .venv/bin/activate
 ```
 
-The first run downloads the YuNet and SFace ONNX models into `models/`.
+第一次运行人脸检测时，程序会把 YuNet 和 SFace 的 ONNX 模型下载到 `models/`。
 
-## Run on the supplied directory
+## 执行人脸检测
 
 ```bash
 uv run detect_faces.py \
@@ -30,23 +29,21 @@ uv run detect_faces.py \
   --output-dir face_review
 ```
 
-`requirements.txt` is retained for tools that do not use `uv`; normal project
-work should use `uv sync` and `uv run`.
+`requirements.txt` 仍然保留给不使用 uv 的工具使用；本项目推荐使用
+`uv sync` 和 `uv run`。
 
-The output contains:
+检测完成后，`face_review/` 中会包含：
 
-* `detections.json`: all face boxes, landmarks, assigned labels, and scores;
-* `annotated/`: review thumbnails with colored labels;
-* `manual_config.json`: a template for correcting ambiguous photos.
+* `detections.json`：所有候选人脸的位置、关键点、身份标签和相似度；
+* `annotated/`：带有彩色标注的人脸预览图；
+* `manual_config.json`：用于人工修正识别结果的配置模板。
 
-The terminal output distinguishes `candidate face(s)` from the final
-`target=x/3` count. Candidate detections include extra people and background
-false positives. The target count only includes faces matched to the three
-reference people; `review=n` marks low-similarity assignments that should be
-checked manually. The raw candidate count is retained as `raw_face_count` in
-`detections.json`.
+终端输出中的 `candidate face(s)` 是检测到的全部候选人脸，可能包括其他家庭成员
+或背景误检；`target=x/3` 只统计与参考图中三个人匹配的人脸。`review=n` 表示有
+低相似度匹配，需要人工检查。原始候选数量会保存在 `detections.json` 的
+`raw_face_count` 字段中。
 
-Detection tuning options are available when needed:
+如果需要调整检测参数，可以使用：
 
 ```bash
 uv run detect_faces.py ... \
@@ -56,15 +53,12 @@ uv run detect_faces.py ... \
   --identity-threshold 0.30
 ```
 
-The reference faces receive `person_1`, `person_2`, and `person_3` from left to
-right. After reviewing the thumbnails, edit `manual_config.json` for frames
-where a person is missing, a fourth person is present, or the identity matcher
-chooses the wrong face. Then pass it back to the detector with
-`--manual-config`; the selected face indices will be marked as accepted and all
-other candidates will be excluded from the target selection.
+参考图中的三张脸会从左到右标记为 `person_1`、`person_2`、`person_3`。检查预览
+图后，可以在 `manual_config.json` 中修正漏检、多人合影或身份匹配错误的照片，
+再通过 `--manual-config` 传给检测程序。被选中的人脸会被标记为有效，其他候选
+人脸会从目标选择中排除。
 
-For example, face indices are zero-based and follow the order in the image's
-`faces` array in `detections.json`:
+人脸索引从 0 开始，顺序与该图片在 `detections.json` 中的 `faces` 数组一致。例如：
 
 ```json
 {
@@ -77,24 +71,20 @@ For example, face indices are zero-based and follow the order in the image's
 }
 ```
 
-If the only problem is two `identity: null` candidates, such as the last two
-records for `20250129.jpg`, no override is needed: they are already excluded
-from `target_face_count`. Deleting them from `detections.json` is unnecessary
-and will be lost when detection is rerun.
+如果问题只是图片末尾存在两个 `identity: null` 的候选人脸（例如
+`20250129.jpg`），不需要手工删除。它们已经不会计入 `target_face_count`，而且重新
+运行检测时直接修改 `detections.json` 也会被覆盖。
 
-## Recommended review order
+## 推荐的检查顺序
 
-1. Open `annotated/` as a contact sheet or inspect the files with low
-   similarity scores.
-2. Confirm which label is the father, child, and mother in
-   `manual_config.json`.
-3. Add overrides for early photos that contain grandparents or only the baby.
-4. Run the animation command below with the corrected configuration.
+1. 把 `annotated/` 制作为联系表，或重点查看相似度较低的预览图。
+2. 在 `manual_config.json` 中确认父亲、孩子和母亲分别对应哪个标签。
+3. 为包含祖父母、其他人物或只有孩子的早期照片添加修正配置。
+4. 使用修正后的配置生成动画。
 
-## Create the animation
+## 生成动画
 
-After reviewing `detections.json` and applying any overrides in
-`manual_config.json`, render the MP4 with:
+检查并修正 `detections.json` 和 `manual_config.json` 后，执行：
 
 ```bash
 uv run make_animation.py \
@@ -109,19 +99,30 @@ uv run make_animation.py \
   --transform person2
 ```
 
-The default `--transform person2` uses only a rotation and uniform scale based
-on `person_2`, then translates the whole image so `person_2` stays at the
-fixed target position. It ignores the other two face positions. By default, `person_2`
-is horizontally centered and vertically placed at `2/3` of the output height,
-which is one-third of the way up from the bottom. Set
-`--person2-x`/`--person2-y` to choose another fixed location. The alternative
-`--transform affine` fixes all three anchors exactly but can stretch the
-background; `--transform similarity` reduces that stretching while allowing
-small residual position error. Portrait images use a blurred background by
-default; use `--background black` or `--background white` for a plain fill.
-Increase `--face-size-ratio` if `person_2` should appear larger.
+默认的 `--transform person2` 只根据 `person_2` 进行旋转和等比例缩放，然后平移
+整张图片，使 `person_2` 的脸保持在固定位置；另外两个人的位置不会参与对齐。
+默认位置是画面水平居中、垂直方向位于输出高度的 `2/3`，也就是从底部向上约
+三分之一处。可以使用 `--person2-x` 和 `--person2-y` 指定其他位置。
 
-Images without all three accepted target faces are skipped and listed in the
-`.report.json` file next to the MP4. The report also records the exact input
-order and all animation parameters. Use `--preview-dir aligned_preview` to
-save the aligned stills before reviewing the video.
+另外还提供两种模式：
+
+* `--transform affine`：精确固定三个人脸的位置，但可能会拉伸背景；
+* `--transform similarity`：减少背景拉伸，但允许有少量位置误差。
+
+竖幅图片默认使用模糊背景补齐画面，也可以通过 `--background black` 或
+`--background white` 使用纯色背景。增大 `--face-size-ratio` 可以让
+`person_2` 在输出中显示得更大。
+
+每张图片右上角会显示从文件名前 8 位数字解析出的月份。例如
+`20230429.jpg` 会显示为红色的 `2023.04`。可以通过 `--date-font-scale` 调整
+日期文字大小；日期字幕会和图片一起渐变。
+
+渲染过程中，终端会显示当前文件名和总进度，例如：
+
+```text
+[001/101]   0.99% 处理 20180529.jpg
+```
+
+缺少所需 `person_2` 的图片会被跳过，并记录在 MP4 旁边的 `.report.json` 中。
+该报告还会保存实际使用的图片顺序和所有动画参数。使用
+`--preview-dir aligned_preview` 可以额外保存对齐后的静态图片，方便检查视频效果。
